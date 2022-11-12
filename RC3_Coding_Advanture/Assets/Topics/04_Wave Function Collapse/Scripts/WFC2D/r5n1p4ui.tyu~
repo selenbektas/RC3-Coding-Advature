@@ -1,0 +1,456 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using System.Linq;
+using UnityEngine.Events;
+using System;
+
+public class Solver2D : MonoBehaviour
+{
+    //the pre-defined tile holder object as a template prefab.
+    [SerializeField] TileHolder2D holderPrefab;
+    //the tile set holds all tiles in a list.
+    [SerializeField] TileSet tileSet;
+
+    //optional texture map used in advanced evaluation.
+    public  Texture2D map;
+    
+    //controls how fast a solving process goes, smaller number for faster, larger for slower
+    public int updateRate = 100;
+    //maximal conflicts allows for solving
+    public int maxConflicts = 10;
+    
+    public int countX;
+    public int countY;
+
+    //the unit scale of the grid
+    public float gridScale = 1f;
+    //the keycode for pressing to reset
+    public KeyCode resetKey;
+
+    //whether to set the boundray nodes with certain label, true to set all boundray nodes with the label below, false to leave them unconstrained.
+    public bool constrainBounds;
+    //the label used to set to the boundray nodes
+    public string boundsLabel;
+
+    //toggle play/pause;
+    public bool play = false;
+    //use default evaluate or use advanced evaluate.
+    public bool advancedEvaluation;
+
+    //dictionary of all tile holder objects, indexed by vector2 IDs, instead of integer numbers.
+    Dictionary<Vector2Int, TileHolder2D> allHolders;
+
+    //dictionary of the number of options for each tile holder object on the vector2 ID.
+    Dictionary<Vector2Int, int> numberOfOptions;
+
+    //a hashset of vector2 ids that were not solved yet.
+    HashSet<Vector2Int> unsolved;
+
+    //is the whole thing solved or not.
+    bool solved = false;
+
+    //count how many steps has passed.
+    int currentStep = 0;
+    //count how many conflicts total.
+    int conflicts = 0;
+
+
+
+    float mapMinGray = 0;
+    public UnityEvent OnSolvedEvent;
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        //setup the grid on start.
+        Setup();
+    }
+
+    // Update is called once per frame
+    void Update()
+    {
+        //reset the whole thing and start over when given key is pressed.
+        if (Input.GetKeyDown(resetKey))
+        {
+            Restore();
+        }
+        //stop updating by returning if the grid is all solved or play is set to false.
+        if (solved||!play)
+        {
+            return;
+        }
+
+        //step the solving process once every certain number of frames, controlled by the varible of "updateRate".
+        if (Time.frameCount % updateRate == 0)
+        {
+            Step();
+            print("step");
+        }
+
+        //reset the grid and start over if there are too many conflicts.
+        if (conflicts > maxConflicts)
+        {
+            Restore();
+        }
+
+
+    }
+
+
+    /// <summary>
+    /// reset the whole grid to initial state, clear the buffered data, and restore all holder objects to initial state.
+    /// </summary>
+    public void Restore()
+    {
+        //clear bufferred option numbers on each vector2 node
+        numberOfOptions.Clear();
+        unsolved.Clear();
+        currentStep = 0;
+        conflicts = 0;
+        solved = false;
+
+
+        //reset all holder objects to initial state
+        foreach (var holder in allHolders.Values)
+        {
+            holder.Restore();
+
+            if (constrainBounds && boundsLabel != string.Empty)
+            {
+                int x = holder.id.x;
+                int y = holder.id.y;
+
+                if (x == 0)
+                {
+                    holder.constraint_left = boundsLabel;
+                }
+                if (y == 0)
+                {
+                    holder.constraint_behind = boundsLabel;
+                }
+                if (x == countX - 1)
+                {
+                    holder.constraint_right = boundsLabel;
+                }
+
+                if (y == countY - 1)
+                {
+                    holder.constraint_forward = boundsLabel;
+                }
+            }
+
+            //put every holder's id to the unsolved list
+            unsolved.Add(holder.id);
+        }
+    }
+
+
+    //initialize the grid
+    public void Setup()
+    {
+        //initialize every dataset
+        allHolders = new Dictionary<Vector2Int, TileHolder2D>();
+        numberOfOptions = new Dictionary<Vector2Int, int>();
+        unsolved = new HashSet<Vector2Int>();
+       
+        //configurate event handler, can use for adding additional functionalities, unused for now.
+        OnSolvedEvent.AddListener(NotifySolved);
+
+        //set the transform position, to relocate the whole grid to the center of screen
+        transform.position = new Vector3(countX * gridScale, countY * gridScale) * -0.5f;
+
+        //2 dimensional for loop to set the grid in order.
+        for (int y = 0; y < countY; y++)
+        {
+            for (int x = 0; x < countX; x++)
+            {
+                //get the vector2 id from x and y.
+                Vector2Int id = new Vector2Int(x, y);
+
+                //make a clone of the holder prefab object, then put it under this solver object as a child.
+                var holder = Instantiate(holderPrefab, transform);
+                //pass the vector2 id to the holder object.
+                holder.id = id;
+                //set the local position of holder object to it's supposed position in the grid regarding it's id and grid scale.
+                holder.transform.localPosition = new Vector3(x * gridScale, y * gridScale);
+
+                holder.Setup();
+
+                //set the bounds conditions if needed.(constrainBounds toggle is set to true, and the given label for bounds edges is not empty)
+                if (constrainBounds && boundsLabel != string.Empty)
+                {
+                    if (x == 0)
+                    {
+                        
+                        //set holder's left edge constraint to the given label
+                        //if the holder is located to the left end of the grid
+                        holder.constraint_left = boundsLabel;
+                    }
+                    if (y == 0)
+                    {
+                        //set holder's back edge constraint to the given label
+                        //if the holder is located to the back/down end of the grid
+                        holder.constraint_behind = boundsLabel;
+                    }
+                    if (x == countX - 1)
+                    {
+                        //set holder's right edge constraint to the given label
+                        //if the holder is located to the right end of the grid
+                        holder.constraint_right = boundsLabel;
+                    }
+
+                    if (y == countY - 1)
+                    {
+                        //set holder's front edge constraint to the given label
+                        //if the holder is located to the front/top end of the grid
+                        holder.constraint_forward = boundsLabel;
+                    }
+                }
+
+                allHolders.Add(id, holder);
+                unsolved.Add(id);
+            }
+        }
+
+    }
+
+    //things to do when the grid is solved
+    public void NotifySolved()
+    {
+        //can add your custom code here, i.e. print something.
+    }
+
+    //the step function solving the grid every iteration.
+    public void Step()
+    {
+        //the id currently inspecting
+        Vector2Int currentID;
+
+        //set current id to a random id if it's the very first step
+        if (currentStep == 0 || numberOfOptions.Count == 0)
+        {
+            currentID = GetRandomID;
+            //calculate the valid options for current id
+            ProcessTileOptions(currentID);
+        }
+        else
+        {
+            //always select the id with the least number of options from the bufferred option data.
+            //giving higher priority to the id has less options, ensures a better solving quality, increases the probability of solving the grid completely.
+            currentID = numberOfOptions.OrderBy(k => k.Value).First().Key;
+
+            //if the number of options = 0, means by it's current configuration of constraints on all sides, there is no any given tile can answer to, 
+            //we can avoid this by design more tiles that can cover as more situations as possible. 
+            if (numberOfOptions[currentID] == 0)
+            {
+                conflicts++;
+                allHolders[currentID].NotifyConfilict();
+                numberOfOptions.Remove(currentID);
+                unsolved.Remove(currentID);
+                return;
+            }
+        }
+
+
+
+        TileHolder2D holder = allHolders[currentID];
+
+        int tileIndex = -1;
+
+        if (advancedEvaluation)
+        {
+            tileIndex = holder.tempOptions.OrderBy(t => AdvancedEvaluate(tileSet[t],currentID)).First();
+        }
+        else
+        {
+            tileIndex = holder.tempOptions.OrderBy(t => Evaluate(tileSet[t])).First();
+        }
+
+        holder.SetTile(tileSet[tileIndex]);
+
+        Vector2Int left = holder.Left;
+        Vector2Int right = holder.Right;
+        Vector2Int behind = holder.Behind;
+        Vector2Int forward = holder.Forward;
+
+        numberOfOptions.Remove(currentID);
+        unsolved.Remove(currentID);
+
+        if (unsolved.Contains(left))
+        {
+            allHolders[left].constraint_right = holder.constraint_left;
+            int optionCount = ProcessTileOptions(left);
+            if (numberOfOptions.ContainsKey(left))
+            {
+                numberOfOptions[left] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(left, optionCount);
+            }
+
+        }
+
+        if (unsolved.Contains(right))
+        {
+            allHolders[right].constraint_left = holder.constraint_right;
+            int optionCount = ProcessTileOptions(right);
+            if (numberOfOptions.ContainsKey(right))
+            {
+                numberOfOptions[right] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(right, optionCount);
+            }
+
+        }
+
+        if (unsolved.Contains(behind))
+        {
+            allHolders[behind].constraint_forward = holder.constraint_behind;
+            int optionCount = ProcessTileOptions(behind);
+            if (numberOfOptions.ContainsKey(behind))
+            {
+                numberOfOptions[behind] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(behind, optionCount);
+            }
+
+        }
+
+        if (unsolved.Contains(forward))
+        {
+            allHolders[forward].constraint_behind = holder.constraint_forward;
+            int optionCount = ProcessTileOptions(forward);
+            if (numberOfOptions.ContainsKey(forward))
+            {
+                numberOfOptions[forward] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(forward, optionCount);
+            }
+        }
+
+        currentStep++;
+
+        if (unsolved.Count == 0)
+        {
+            solved = true;
+            OnSolvedEvent.Invoke();
+        }
+
+    }
+
+   
+
+    /// <summary>
+    /// this function goes through all tiles in the set to get the valid options, and returns the total number of options, which can be used to
+    /// order the priority of which tile holder to be solved earlier.
+    /// </summary>
+    /// <param name="id"></param>
+    /// <returns></returns>
+    int ProcessTileOptions(Vector2Int id)
+    {
+        var holder = allHolders[id];
+
+        holder.tempOptions.Clear();
+
+        int optionCount = 0;
+        for (int i = 0; i < tileSet.Count; i++)
+        {
+            if (holder.IsConsistantWith(tileSet[i]))
+            {
+                holder.tempOptions.Add(i);
+                optionCount++;
+            }
+        }
+
+        return optionCount;
+    }
+
+
+    /// <summary>
+    /// normal evaluate function that can be customized for selecting tiles under specific requirements. 
+    /// </summary>
+    /// <param name="tile"></param>
+    /// <returns></returns>
+    float Evaluate(Tile2D tile)
+    {
+        // here you can implement your custom function code to return particular values
+
+
+
+        // here the random is only an example
+        return UnityEngine.Random.Range(0.0f, 1.0f);
+    }
+
+    /// <summary>
+    /// advanced evaluate function that takes in the vector2 id as a coordinate and measure certain value regarding this id.
+    /// </summary>
+    /// <param name="tile"></param>
+    /// <param name="id"></param>
+    /// <returns></returns>
+
+    float AdvancedEvaluate(Tile2D tile, Vector2Int id)
+    {
+        var tex = tile.GetComponent<SpriteRenderer>().sprite.texture;
+        float gray = TestTextureGrayscale(tex);
+
+        float u = id.x / (float)countX;
+        float v = id.y / (float)countY;
+
+        float mapGray = map.GetPixelBilinear(u,v).grayscale;
+
+        mapGray = Mathf.Lerp(mapMinGray, 1.0f, mapGray);
+
+        return Mathf.Abs(gray - mapGray);
+    }
+
+
+    /// <summary>
+    /// Get a random vector2int from the grid
+    /// </summary>
+    Vector2Int GetRandomID
+    {
+        get
+        {
+            int x = UnityEngine.Random.Range(0, countX);
+            int y = UnityEngine.Random.Range(0, countY);
+            return new Vector2Int(x, y);
+        }
+    }
+
+    public void SetMapMinGray(float value)
+    {
+        mapMinGray = value;
+    }
+
+    float TestTextureGrayscale(Texture2D texture)
+    {
+        var pixels = texture.GetPixels32(2);
+
+        var average = pixels.Sum(c => 0.2989f * c.r + 0.5870f * c.g + 0.1140f * c.b)/pixels.Length;
+
+        return average / 255f;
+
+    }
+
+    public bool IsSolved
+    {
+        get
+        {
+            return solved;
+        }
+    }
+    public void test()
+    {
+        Camera camera;
+
+
+    }
+}

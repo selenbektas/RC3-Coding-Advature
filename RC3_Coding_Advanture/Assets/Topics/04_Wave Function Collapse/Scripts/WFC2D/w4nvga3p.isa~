@@ -1,0 +1,411 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using System.Linq;
+using UnityEngine.Events;
+using System;
+
+public class Solver2D : MonoBehaviour
+{
+    //the pre-defined tile holder object as a template prefab.
+    [SerializeField] TileHolder2D holderPrefab;
+    //the tile set holds all tiles in a list.
+    [SerializeField] TileSet tileSet;
+
+    //optional texture map used in advanced evaluation.
+    public  Texture2D map;
+    
+    //controls how fast a solving process goes, smaller number for faster, larger for slower
+    public int updateRate = 100;
+    //maximal conflicts allows for solving
+    public int maxConflicts = 10;
+    
+    public int countX;
+    public int countY;
+
+    //the unit scale of the grid
+    public float gridScale = 1f;
+    //the keycode for pressing to reset
+    public KeyCode resetKey;
+
+    //whether to set the boundray nodes with certain label, true to set all boundray nodes with the label below, false to leave them unconstrained.
+    public bool constrainBounds;
+    //the label used to set to the boundray nodes
+    public string boundsLabel;
+
+    //toggle play/pause;
+    public bool play = false;
+    //use default evaluate or use advanced evaluate.
+    public bool advancedEvaluation;
+
+    //dictionary of all tile holder objects, indexed by vector2 IDs, instead of integer numbers.
+    Dictionary<Vector2Int, TileHolder2D> allHolders;
+
+    //dictionary of the number of options for each tile holder object on the vector2 node.
+    Dictionary<Vector2Int, int> numberOfOptions;
+
+    HashSet<Vector2Int> unSolved;
+
+    bool solved = false;
+
+    int currentStep = 0;
+
+    int conflicts = 0;
+
+    float mapMinGray = 0;
+
+    public UnityEvent OnSolvedEvent;
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        Setup();
+    }
+
+    // Update is called once per frame
+    void Update()
+    {
+        if (Input.GetKeyDown(resetKey))
+        {
+            Restore();
+        }
+        if (solved||!play)
+        {
+            return;
+        }
+
+        if (Time.frameCount % updateRate == 0)
+        {
+            Step();
+            print("step");
+        }
+
+        if (conflicts > maxConflicts)
+        {
+            Restore();
+        }
+
+
+    }
+
+    public void Restore()
+    {
+
+        numberOfOptions.Clear();
+        currentStep = 0;
+        conflicts = 0;
+        solved = false;
+
+        foreach (var holder in allHolders.Values)
+        {
+            holder.Restore();
+
+            if (constrainBounds && boundsLabel != string.Empty)
+            {
+                int x = holder.id.x;
+                int y = holder.id.y;
+
+                if (x == 0)
+                {
+                    holder.constraint_left = boundsLabel;
+                }
+                if (y == 0)
+                {
+                    holder.constraint_behind = boundsLabel;
+                }
+                if (x == countX - 1)
+                {
+                    holder.constraint_right = boundsLabel;
+                }
+
+                if (y == countY - 1)
+                {
+                    holder.constraint_forward = boundsLabel;
+                }
+            }
+
+            unSolved.Add(holder.id);
+        }
+
+
+    }
+
+    public void Setup()
+    {
+        allHolders = new Dictionary<Vector2Int, TileHolder2D>();
+        numberOfOptions = new Dictionary<Vector2Int, int>();
+        unSolved = new HashSet<Vector2Int>();
+       
+
+        OnSolvedEvent.AddListener(NotifySolved);
+
+        transform.position = new Vector3(countX * gridScale, countY * gridScale) * -0.5f;
+
+        for (int y = 0; y < countY; y++)
+        {
+            for (int x = 0; x < countX; x++)
+            {
+                Vector2Int id = new Vector2Int(x, y);
+
+                var holder = Instantiate(holderPrefab, transform);
+                holder.id = id;
+
+                holder.transform.localPosition = new Vector3(x * gridScale, y * gridScale);
+                holder.Setup();
+
+                if (constrainBounds && boundsLabel != string.Empty)
+                {
+                    if (x == 0)
+                    {
+                        holder.constraint_left = boundsLabel;
+                    }
+                    if (y == 0)
+                    {
+                        holder.constraint_behind = boundsLabel;
+                    }
+                    if (x == countX - 1)
+                    {
+                        holder.constraint_right = boundsLabel;
+                    }
+
+                    if (y == countY - 1)
+                    {
+                        holder.constraint_forward = boundsLabel;
+                    }
+                }
+
+                allHolders.Add(id, holder);
+                unSolved.Add(id);
+            }
+        }
+
+    }
+
+    public void NotifySolved()
+    {
+
+    }
+
+    public void Step()
+    {
+        Vector2Int currentID;
+        if (currentStep == 0 || numberOfOptions.Count == 0)
+        {
+            currentID = GetRandomID;
+            ProcessTileOptions(currentID);
+        }
+        else
+        {
+            currentID = numberOfOptions.OrderBy(k => k.Value).First().Key;
+            if (numberOfOptions[currentID] == 0)
+            {
+                conflicts++;
+                allHolders[currentID].NotifyConfilict();
+                numberOfOptions.Remove(currentID);
+                unSolved.Remove(currentID);
+                return;
+            }
+        }
+
+
+
+        TileHolder2D holder = allHolders[currentID];
+
+        int tileIndex = -1;
+
+        if (advancedEvaluation)
+        {
+            tileIndex = holder.tempOptions.OrderBy(t => AdvancedEvaluate(tileSet[t],currentID)).First();
+        }
+        else
+        {
+            tileIndex = holder.tempOptions.OrderBy(t => Evaluate(tileSet[t])).First();
+        }
+
+        holder.SetTile(tileSet[tileIndex]);
+
+        Vector2Int left = holder.Left;
+        Vector2Int right = holder.Right;
+        Vector2Int behind = holder.Behind;
+        Vector2Int forward = holder.Forward;
+
+        numberOfOptions.Remove(currentID);
+        unSolved.Remove(currentID);
+
+        if (unSolved.Contains(left))
+        {
+            allHolders[left].constraint_right = holder.constraint_left;
+            int optionCount = ProcessTileOptions(left);
+            if (numberOfOptions.ContainsKey(left))
+            {
+                numberOfOptions[left] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(left, optionCount);
+            }
+
+        }
+
+        if (unSolved.Contains(right))
+        {
+            allHolders[right].constraint_left = holder.constraint_right;
+            int optionCount = ProcessTileOptions(right);
+            if (numberOfOptions.ContainsKey(right))
+            {
+                numberOfOptions[right] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(right, optionCount);
+            }
+
+        }
+
+        if (unSolved.Contains(behind))
+        {
+            allHolders[behind].constraint_forward = holder.constraint_behind;
+            int optionCount = ProcessTileOptions(behind);
+            if (numberOfOptions.ContainsKey(behind))
+            {
+                numberOfOptions[behind] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(behind, optionCount);
+            }
+
+        }
+
+        if (unSolved.Contains(forward))
+        {
+            allHolders[forward].constraint_behind = holder.constraint_forward;
+            int optionCount = ProcessTileOptions(forward);
+            if (numberOfOptions.ContainsKey(forward))
+            {
+                numberOfOptions[forward] = optionCount;
+            }
+            else
+            {
+                numberOfOptions.Add(forward, optionCount);
+            }
+        }
+
+        currentStep++;
+
+        if (unSolved.Count == 0)
+        {
+            solved = true;
+            OnSolvedEvent.Invoke();
+        }
+
+    }
+
+   
+
+    /// <summary>
+    /// this function goes through all tiles in the set to get the valid options, and returns the total number of options, which can be used to
+    /// order the priority of which tile holder to be solved earlier.
+    /// </summary>
+    /// <param name="id"></param>
+    /// <returns></returns>
+    int ProcessTileOptions(Vector2Int id)
+    {
+        var holder = allHolders[id];
+
+        holder.tempOptions.Clear();
+
+        int optionCount = 0;
+        for (int i = 0; i < tileSet.Count; i++)
+        {
+            if (holder.IsConsistantWith(tileSet[i]))
+            {
+                holder.tempOptions.Add(i);
+                optionCount++;
+            }
+        }
+
+        return optionCount;
+    }
+
+
+    /// <summary>
+    /// normal evaluate function that can be customized for selecting tiles under specific requirements. 
+    /// </summary>
+    /// <param name="tile"></param>
+    /// <returns></returns>
+    float Evaluate(Tile2D tile)
+    {
+        // here you can implement your custom function code to return particular values
+
+
+
+        // here the random is only an example
+        return UnityEngine.Random.Range(0.0f, 1.0f);
+    }
+
+    /// <summary>
+    /// advanced evaluate function that takes in the vector2 id as a coordinate and measure certain value regarding this id.
+    /// </summary>
+    /// <param name="tile"></param>
+    /// <param name="id"></param>
+    /// <returns></returns>
+
+    float AdvancedEvaluate(Tile2D tile, Vector2Int id)
+    {
+        var tex = tile.GetComponent<SpriteRenderer>().sprite.texture;
+        float gray = TestTextureGrayscale(tex);
+
+        float u = id.x / (float)countX;
+        float v = id.y / (float)countY;
+
+        float mapGray = map.GetPixelBilinear(u,v).grayscale;
+
+        mapGray = Mathf.Lerp(mapMinGray, 1.0f, mapGray);
+
+        return Mathf.Abs(gray - mapGray);
+    }
+
+
+    /// <summary>
+    /// Get a random vector2int from the grid
+    /// </summary>
+    Vector2Int GetRandomID
+    {
+        get
+        {
+            int x = UnityEngine.Random.Range(0, countX);
+            int y = UnityEngine.Random.Range(0, countY);
+            return new Vector2Int(x, y);
+        }
+    }
+
+    public void SetMapMinGray(float value)
+    {
+        mapMinGray = value;
+    }
+
+    float TestTextureGrayscale(Texture2D texture)
+    {
+        var pixels = texture.GetPixels32(2);
+
+        var average = pixels.Sum(c => 0.2989f * c.r + 0.5870f * c.g + 0.1140f * c.b)/pixels.Length;
+
+        return average / 255f;
+
+    }
+
+    public bool IsSolved
+    {
+        get
+        {
+            return solved;
+        }
+    }
+    public void test()
+    {
+        Camera camera;
+
+
+    }
+}
