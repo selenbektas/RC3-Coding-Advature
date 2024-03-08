@@ -144,10 +144,11 @@ public class Solver2D : MonoBehaviour
     /// </summary>
     public void Setup()
     {
-        //initialize every dataset
+        //initialize every dataset i.e. (0,1),(0,2).....
         allHolders = new Dictionary<Vector2Int, TileHolder2D>();
         checkedNodesOptionCount = new Dictionary<Vector2Int, int>();
         unsolved = new HashSet<Vector2Int>();
+
 
         //configurate event handler, can use for adding additional functionalities, unused for now.
         OnSolvedEvent.AddListener(NotifySolved);
@@ -171,7 +172,6 @@ public class Solver2D : MonoBehaviour
                 holder.transform.localPosition = new Vector3(x * gridScale, y * gridScale);
 
                 holder.Setup();
-
 
                 //set the bounds conditions if needed.(constrainBounds toggle is set to true, and the given label for bounds edges is not empty)
                 if (constrainBounds && boundsLabel != string.Empty)
@@ -209,7 +209,6 @@ public class Solver2D : MonoBehaviour
             }
         }
     }
-
 
 
     /// <summary>
@@ -289,6 +288,7 @@ public class Solver2D : MonoBehaviour
         //remove it from the unsolved list and options list after solveing.
         checkedNodesOptionCount.Remove(currentID);
         unsolved.Remove(currentID);
+
 
         //deal with the adjacent neighbors on four sides.
         Vector2Int left = holder.Left;

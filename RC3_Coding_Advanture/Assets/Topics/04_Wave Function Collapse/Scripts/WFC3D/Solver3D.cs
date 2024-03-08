@@ -505,6 +505,7 @@ public class Solver3D : MonoBehaviour
     {
         // here you can implement your custom function code to return particular values
 
+        //return tile.param;
 
         // here the random is only an example
         return UnityEngine.Random.Range(0.0f, 1.0f);
@@ -524,8 +525,36 @@ public class Solver3D : MonoBehaviour
 
         // this is an example as well, you can input something else.
 
+        var neighbors = allHolders[id].GetNeightbors();
 
-        return UnityEngine.Random.Range(0.0f, 1.0f);
+        float diff = 0;
+
+        int count = 0;
+
+        
+
+        float param = tile.param;
+
+        foreach (var nb in neighbors)
+        {
+            if (!allHolders.ContainsKey(nb))
+            {
+                continue;
+            }
+            var hd = allHolders[nb];
+            if (hd.m_tile != null)
+            {
+                diff += Mathf.Abs(hd.m_tile.param - param);
+                count++;
+            }
+        }
+
+        float t = 0.05f;
+        diff /= count + 1;
+
+        return Mathf.Abs(t - diff);
+
+        //return UnityEngine.Random.Range(0.0f, 1.0f);
     }
 
     /// <summary>
